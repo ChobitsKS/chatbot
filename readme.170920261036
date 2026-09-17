@@ -1,0 +1,129 @@
+สิ่งที่ต้องตั้งค่าใน Script Properties กรอกตามนี้ใน Apps Script > Project settings > Script properties หรือใช้โค้ด setProperty แบบเดี่ยว ๆ
+
+Required:
+
+PAGE_ACCESS_TOKEN
+VERIFY_TOKEN
+OPENAI_API_KEY
+Recommended:
+
+OPENAI_MODEL = gpt-5.5
+OPENAI_REASONING_EFFORT = medium
+OPENAI_MAX_OUTPUT_TOKENS = 700
+VECTOR_STORE_ID
+VECTOR_MAX_RESULTS = 5
+VECTOR_SCORE_THRESHOLD = 0.25
+Chat behavior:
+
+BOT_SYSTEM_PROMPT
+BOT_NO_DATA_TEXT
+BOT_CONTACT_BUTTON_TITLE
+BOT_CONTACT_BUTTON_PAYLOAD
+BOT_CONTACT_MESSAGE_TEXT
+BOT_AGENT_MODE_TEXT
+BOT_AGENT_RETURN_TEXT
+BOT_AGENT_TIMEOUT_MINUTES = 1
+BOT_AGENT_END_BUTTON_TITLE = จบการสนทนา
+BOT_AGENT_END_TEXT
+BOT_AGENT_MENU_PAYLOAD = END_CHAT
+BOT_CONTACT_KEYWORDS = ติดต่อเจ้าหน้าที่,ขอคุยกับคน,คุยกับคน,อยากคุยกับคน,คุยกับเจ้าหน้าที่
+History:
+
+BOT_HISTORY_MAX_MESSAGES = 12
+BOT_HISTORY_MAX_CHARS = 8000
+Rulebase:
+
+RULEBASE_SHEET_NAME = rulebase
+วิธีติดตั้งและใช้งาน
+
+สร้าง Google Apps Script
+เปิด https://script.google.com
+สร้าง project ใหม่
+วางโค้ดด้านบนทั้งหมดลงในไฟล์ Code.gs
+ตั้งชื่อไฟล์ให้เป็น เช่น SchoolMedChatBot
+เชื่อมกับ Google Sheet
+สร้าง Spreadsheet ใหม่ 1 แผ่น
+จาก Apps Script ให้เปิด Spreadsheet ที่ต้องการให้ Bind กับ Script
+ใน Spreadsheet ให้สร้าง Sheet ต่อไปนี้:
+rulebase
+bot_users
+bot_history
+bot_last_messages
+bot_processed_events
+bot_agent_config
+ตั้งค่า Script Properties
+ไปที่ Apps Script > Project Settings > Script properties
+เพิ่มค่าให้ครบตามรายการด้านบน
+ตัวอย่าง:
+PAGE_ACCESS_TOKEN = Token จาก Facebook Page
+VERIFY_TOKEN = Token ที่ใช้เช็ค webhook
+OPENAI_API_KEY = API key จาก OpenAI
+VECTOR_STORE_ID = ID ของ Vector Store
+RULEBASE_SHEET_NAME = rulebase
+ตั้งค่า Rulebase Sheet
+ให้ Sheet ชื่อ rulebase
+Header ควรมีอย่างน้อย:
+id
+intent
+match_type
+keywords
+reply_type
+reply_text
+reply_data
+enabled
+ตัวอย่างข้อมูล:
+
+id: greeting
+intent: greeting
+match_type: contains
+keywords: สวัสดี,hello,hi
+reply_type: text
+reply_text: สวัสดีค่ะ มีใจยินดีช่วยเหลือเรื่องข้อมูลของโรงเรียนแพทย์ฯ
+reply_data:
+enabled: true
+รัน setup ครั้งแรก ใน Apps Script ให้รันฟังก์ชันดังนี้แบบลำดับ:
+setupAgentModeProperties()
+setupNewSheetSystem()
+setupAgentTimeoutConfig()
+setupPersistentMenu()
+หมายเหตุ:
+
+setupPersistentMenu() จะตั้งค่า menu บน Messenger
+setupAgentTimeoutConfig() จะสร้าง Sheet bot_agent_config และตั้ง trigger timeout
+ตั้งค่า Facebook webhook ใน Facebook App:
+ไปที่ Messenger > Settings > Webhooks
+Add Callback URL:
+Callback URL = URL จาก Apps Script deployment (Deploy > New deployment > Web app)
+Verify Token = ค่า VERIFY_TOKEN ที่คุณตั้งไว้
+เลือก Events:
+messages
+messaging_postbacks
+message_echoes
+Deploy เป็น Web App
+ใน Apps Script:
+Deploy > New deployment
+Type = Web app
+Execute as = Me
+Who has access = Anyone
+Copy URL ที่ได้ แล้วใช้ใน Facebook webhook
+ทดสอบ
+ส่งข้อความทดสอบผ่าน Messenger
+เช่น:
+สวัสดีค่ะ
+สมัครเรียนยังไง
+ติดต่อเจ้าหน้าที่
+ขอข้อมูลเรื่องหลักสูตร
+ถามเกี่ยวกับ vector content
+ตรวจสอบ log
+เปิด Apps Script > Executions หรือ Logs
+ดู error ถ้ามี เช่น PAGE_ACCESS_TOKEN missing หรือ OPENAI_API_KEY missing
+คำแนะนำสำคัญ
+
+หากใช้ OpenAI Responses API ต้องใช้ model ที่รองรับ เช่น gpt-5.5 หรือ แบบ o-series
+หาก vector store รันไม่ถูกต้อง ให้ตรวจว่า VECTOR_STORE_ID และ API key ถูกต้อง
+หากต้องการให้บอทตอบแบบห้ามตอบเกินจากข้อมูล ให้รักษา DEFAULT_SYSTEM_PROMPT ไว้เหมือนเดิม
+ควรให้ rulebase เป็นตัวช่วยถามปกติและตอบคำถามอัตโนมัติแบบเร็ว ก่อนเข้าถึง OpenAI
+ถ้าต้องการ ผมสามารถช่วยต่อได้ 2 แบบต่อไปนี้:
+
+จัดทำเวอร์ชันไฟล์สุดท้ายแบบ “พร้อมคัดลอกลง Apps Script ได้ทันที” ให้เป็นไฟล์เดียวที่ดูสะอาดกว่าเดิมอีกนิด
+จัดทำ “README installation guide” แบบเป็นไฟล์ Markdown พร้อมขั้นตอนทำให้ครบ เช่น ตั้งค่าใน Facebook, OpenAI, Spreadsheet, Rulebase, Deploy, Test case
