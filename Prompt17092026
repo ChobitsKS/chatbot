@@ -1,0 +1,2230 @@
+# งาน: Migrate SchoolMED Messenger Chatbot จาก Google Apps Script เป็น PHP + MySQL พร้อม Custom Hybrid RAG
+
+คุณคือ Senior PHP Backend Developer + System Architect + RAG Engineer
+
+ฉันมีระบบ Facebook Messenger Chatbot สำหรับโรงเรียนแพทยศาสตร์/วิทยาศาสตร์สุขภาพ ซึ่งปัจจุบันพัฒนาด้วย:
+
+* Google Apps Script (GAS)
+* Google Sheets
+* Facebook Messenger Webhook
+* OpenAI Responses API
+* OpenAI File Search / Vector Store
+
+ฉันต้องการย้ายระบบทั้งหมดจาก GAS ไปเป็น Web Application ที่ติดตั้งบน PHP Server + MySQL/MariaDB และมี Admin Dashboard
+
+## เป้าหมายสำคัญ
+
+ต้องการระบบที่:
+
+1. ใช้งานจริงบน Shared Hosting / PHP Server ได้
+2. ติดตั้งง่าย
+3. ไม่ต้องใช้ Laravel
+4. ไม่ต้องใช้ Node.js
+5. ไม่ต้องใช้ React/Vue
+6. ไม่ต้องมี Build Process ที่ซับซ้อน
+7. ใช้ PHP + MySQL/MariaDB + HTML/CSS/JavaScript เป็นหลัก
+8. ใช้ PDO + Prepared Statements
+9. สามารถอัปโหลดไฟล์ขึ้น Server แล้วตั้งค่าได้ง่าย
+10. สามารถตั้ง Facebook Webhook ได้ง่าย
+11. มี Admin Dashboard
+12. มีระบบจัดการ Rulebase
+13. มีระบบจัดการผู้ใช้และประวัติการสนทนา
+14. มีระบบ Agent/Human Handoff
+15. มีระบบ Logging สำหรับนำไปทำวิจัย
+16. มีระบบ Custom RAG ที่แม่นยำกว่าการใช้ Vector Store เพียงอย่างเดียว
+17. Google Drive เป็นแหล่งเอกสารต้นฉบับ
+18. MySQL เป็นฐานข้อมูลและ RAG Index
+19. ไม่ให้ข้อมูลจากเอกสารคนละปี/คนละแผน/คนละโครงการปะปนกัน
+20. ต้องมีระบบ `[[NO_DATA]]` เมื่อข้อมูลไม่เพียงพอ
+
+---
+
+# 1. สิ่งสำคัญที่สุด: ให้วิเคราะห์ระบบ GAS เดิมก่อน
+
+ฉันจะส่ง Source Code ของ GAS เดิมให้คุณ
+
+ห้ามเริ่มเขียน PHP ทันที
+
+ขั้นตอนแรกต้อง:
+
+### STEP 1 — วิเคราะห์ GAS เดิม
+
+วิเคราะห์:
+
+* Flow ของ Webhook
+* Facebook Messenger Event
+* User/session handling
+* Deduplication
+* Rulebase
+* OpenAI
+* RAG
+* Conversation history
+* Agent mode
+* Timeout
+* Persistent Menu
+* Quick Reply
+* Button
+* Carousel
+* Card
+* Image
+* PDF
+* Logging
+* Settings
+* Error handling
+
+จากนั้นสร้างตาราง Mapping:
+
+| GAS เดิม             | PHP ใหม่                        |
+| -------------------- | ------------------------------- |
+| Script Properties    | settings/config                 |
+| bot_users            | users                           |
+| bot_history          | conversation_messages           |
+| bot_last_messages    | duplicate_messages / user state |
+| bot_processed_events | processed_events                |
+| bot_agent_config     | agent settings                  |
+| rulebase             | rulebase                        |
+| OpenAI               | OpenAI API service              |
+| Vector Store         | Custom RAG                      |
+| GAS Trigger          | cron.php                        |
+| doPost()             | webhook.php                     |
+
+ต้องรักษาพฤติกรรมเดิมของระบบให้มากที่สุด
+
+ห้ามตัด Feature เดิมออกโดยไม่แจ้ง
+
+---
+
+# 2. Technology Stack
+
+ใช้:
+
+* PHP 8.2 หรือ PHP 8.3
+* MySQL 8.x หรือ MariaDB ที่เหมาะสม
+* PDO
+* HTML5
+* CSS3
+* Vanilla JavaScript
+* Bootstrap หรือ CSS ธรรมดา
+* AJAX / Fetch API
+
+หลีกเลี่ยง:
+
+* Laravel
+* Symfony
+* Node.js
+* React
+* Vue
+* Next.js
+* Docker
+* Redis
+* Elasticsearch
+
+เว้นแต่มีเหตุผลทางเทคนิคที่จำเป็นจริง ๆ
+
+เป้าหมายคือ:
+
+> Upload files → import database → configure API keys → set webhook → ใช้งานได้
+
+---
+
+# 3. Architecture หลัก
+
+ระบบใหม่ต้องแบ่งเป็น 3 ส่วนหลัก
+
+```text
+Google Drive
+     │
+     │ Sync
+     ▼
+Document Importer
+     │
+     ├── Extract Text
+     ├── Metadata
+     ├── Chunking
+     └── Embedding
+            │
+            ▼
+          MySQL
+     ┌─────────────────┐
+     │ documents       │
+     │ document_chunks │
+     │ embeddings      │
+     │ metadata        │
+     └─────────────────┘
+            │
+            ▼
+      Custom Hybrid RAG
+            │
+            ▼
+       OpenAI API
+            │
+            ▼
+       Messenger
+```
+
+และ
+
+```text
+Facebook Messenger
+        │
+        ▼
+    webhook.php
+        │
+        ├── Dedup
+        ├── User state
+        ├── Agent mode
+        ├── Rulebase
+        │
+        └── RAG
+              │
+              ▼
+           OpenAI
+              │
+              ▼
+        Messenger API
+```
+
+---
+
+# 4. Google Drive เป็น Source of Truth
+
+ต้องกำหนดชัดเจนว่า:
+
+> Google Drive = แหล่งเอกสารต้นฉบับ
+
+ไม่จำเป็นต้องเก็บ PDF/DOCX ต้นฉบับทั้งหมดบน Server แบบถาวร
+
+ตัวอย่าง:
+
+```text
+Google Drive
+│
+├── รับสมัคร
+│   ├── 2570
+│   │   ├── ภาษาอังกฤษและดิจิทัล.pdf
+│   │   ├── วิทยาศาสตร์.pdf
+│   │   └── ...
+│   │
+│   └── 2569
+│
+├── หลักสูตร
+├── ค่าเทอม
+├── การสมัคร
+└── คู่มือ
+```
+
+PHP สามารถ:
+
+1. อ่านไฟล์จาก Google Drive
+2. ดาวน์โหลดมาไว้ชั่วคราว
+3. Extract text
+4. Process
+5. Chunk
+6. Generate embedding
+7. บันทึกเข้า MySQL
+8. ลบ temporary file
+
+ไม่ควรให้ Messenger Webhook ไปอ่าน Google Drive ทุกครั้งที่มีคำถาม
+
+---
+
+# 5. Google Drive Sync
+
+ต้องมีระบบ:
+
+```text
+Google Drive
+     ↓
+Sync
+     ↓
+ตรวจ File ID
+     ↓
+ตรวจ modifiedTime / hash
+     ↓
+ถ้าไม่เปลี่ยน → ไม่ต้อง process ใหม่
+ถ้าเปลี่ยน → process ใหม่
+ถ้าไฟล์ถูกลบ → mark inactive
+```
+
+ต้องมี:
+
+* Manual Sync
+* Auto Sync ผ่าน cron
+* Sync เฉพาะไฟล์ใหม่
+* Sync เฉพาะไฟล์ที่เปลี่ยน
+* Skip ไฟล์ที่ไม่มีการเปลี่ยนแปลง
+* Error log
+* Sync status
+* Last synced
+* File hash
+* Google Drive File ID
+
+Admin ต้องเห็นสถานะ:
+
+* Indexed
+* Pending
+* Processing
+* Error
+* Deleted
+* Disabled
+
+---
+
+# 6. Google Drive Authentication
+
+ออกแบบให้รองรับการเข้าถึง Google Drive อย่างปลอดภัย
+
+อย่าสมมติว่า Google Drive folder เป็น Public
+
+ให้เลือกวิธีที่เหมาะสมระหว่าง:
+
+* Google Drive API + Service Account
+* OAuth 2.0
+
+และอธิบายว่าแต่ละแบบเหมาะกับกรณีใด
+
+สำหรับระบบจริง ให้ตั้งค่า:
+
+```text
+GOOGLE_DRIVE_FOLDER_ID
+GOOGLE_CLIENT_ID
+GOOGLE_CLIENT_SECRET
+GOOGLE_SERVICE_ACCOUNT
+```
+
+หรือรูปแบบ configuration ที่เหมาะสม
+
+ห้าม hard-code credential ลง source code
+
+---
+
+# 7. Document Types
+
+อย่างน้อยต้องรองรับ:
+
+* PDF
+* DOCX
+* TXT
+* CSV
+* Google Docs
+* Google Sheets ถ้าเหมาะสม
+
+ถ้า Server ไม่มี library สำหรับอ่าน PDF/DOCX ให้เลือกวิธีที่ติดตั้งง่ายที่สุด
+
+หลีกเลี่ยง dependency ขนาดใหญ่
+
+ถ้าจำเป็นต้องใช้ Composer ให้แจ้งก่อนและเลือก dependency เท่าที่จำเป็น
+
+---
+
+# 8. Document Metadata
+
+นี่เป็นหัวใจสำคัญของระบบ RAG
+
+ทุกเอกสารต้องมี Metadata เช่น:
+
+```text
+academic_year
+program
+study_plan
+admission_round
+project
+document_type
+faculty
+active
+```
+
+ตัวอย่าง:
+
+```text
+รับสมัคร_ภาษาอังกฤษ_2570.pdf
+
+academic_year = 2570
+program = แพทยศาสตร์
+study_plan = อังกฤษและดิจิทัล
+project = โครงการ A
+admission_round = รอบ 1
+document_type = admission
+```
+
+อีกไฟล์:
+
+```text
+รับสมัคร_วิทย์_2570.pdf
+
+academic_year = 2570
+program = แพทยศาสตร์
+study_plan = วิทยาศาสตร์
+project = โครงการ B
+document_type = admission
+```
+
+---
+
+# 9. ห้ามให้ RAG ข้ามปีหรือข้ามแผน
+
+นี่เป็นปัญหาสำคัญของระบบปัจจุบัน
+
+ตัวอย่างคำถาม:
+
+> แผนภาษาอังกฤษและดิจิทัล เรียนภาคกลาง ทะเบียนบ้านอยู่หาดใหญ่สมัครได้ไหมครับ
+
+ระบบปัจจุบันอาจไปหยิบเอกสาร:
+
+```text
+แผนวิทยาศาสตร์
+```
+
+เพราะในไฟล์นั้นมีคำว่า:
+
+```text
+คะแนนภาษาอังกฤษ
+```
+
+ซึ่งไม่ควรเกิดขึ้น
+
+ระบบใหม่ต้องใช้:
+
+## Metadata Filtering ก่อน Semantic Search
+
+ตัวอย่าง:
+
+```text
+User Query
+↓
+Query Analysis
+↓
+academic_year = ?
+study_plan = อังกฤษและดิจิทัล
+program = ?
+project = ?
+↓
+Filter documents
+↓
+Keyword Search
+↓
+Embedding Search
+↓
+Rerank
+↓
+Top chunks
+↓
+OpenAI
+```
+
+ห้ามใช้ semantic similarity เพียงอย่างเดียว
+
+---
+
+# 10. Query Analysis
+
+ก่อนค้นหา RAG ต้องวิเคราะห์คำถาม
+
+ตัวอย่าง:
+
+```text
+"แผนภาษาอังกฤษและดิจิทัล เรียนภาคกลาง
+ทะเบียนบ้านอยู่หาดใหญ่สมัครได้ไหมครับ"
+```
+
+ควรแยกเป็น:
+
+```json
+{
+  "intent": "admission_eligibility",
+  "academic_year": null,
+  "program": null,
+  "study_plan": "อังกฤษและดิจิทัล",
+  "project": null,
+  "location": "หาดใหญ่",
+  "keywords": [
+    "สมัคร",
+    "ทะเบียนบ้าน",
+    "หาดใหญ่"
+  ]
+}
+```
+
+ข้อสำคัญ:
+
+* ถ้าผู้ใช้ระบุปีชัดเจน → filter ปีนั้น
+* ถ้าระบุแผนชัดเจน → filter แผนนั้น
+* ถ้าระบุโครงการ → filter โครงการนั้น
+* ถ้าระบุข้อมูลขัดกัน → ห้ามเดา
+* ถ้าไม่แน่ใจ → อย่าขยายไปหาเอกสารคนละแผน
+
+สามารถใช้ deterministic rule / keyword dictionary ก่อน
+
+และใช้ LLM ช่วยเฉพาะกรณีที่จำเป็น
+
+ห้ามให้ LLM สร้าง metadata ที่ไม่มีอยู่จริง
+
+---
+
+# 11. Follow-up Questions
+
+ต้องรองรับ context เช่น:
+
+User:
+
+> แผนภาษาอังกฤษสมัครได้ไหม
+
+Bot:
+
+> ...
+
+User:
+
+> แล้วถ้าอยู่หาดใหญ่ล่ะ
+
+ระบบต้องเข้าใจว่า:
+
+```text
+study_plan = อังกฤษ
+```
+
+มาจาก conversation ก่อนหน้า
+
+แต่ถ้าผู้ใช้พูดข้อมูลใหม่ชัดเจน:
+
+> แล้วถ้าเปลี่ยนเป็นแผนวิทยาศาสตร์ล่ะ
+
+ต้องใช้:
+
+```text
+study_plan = วิทยาศาสตร์
+```
+
+แทนค่าเดิม
+
+กฎ:
+
+> Explicit information in the latest user message overrides previous context.
+
+---
+
+# 12. Custom RAG
+
+ห้ามใช้ OpenAI Vector Store เป็น Knowledge Base หลัก
+
+ให้สร้าง Custom RAG
+
+Pipeline:
+
+```text
+Document
+↓
+Extract text
+↓
+Clean text
+↓
+Chunk
+↓
+Metadata
+↓
+Embedding
+↓
+MySQL
+```
+
+และตอนถาม:
+
+```text
+User Question
+↓
+Query Analysis
+↓
+Metadata Filtering
+↓
+Keyword / Full-text Search
+↓
+Embedding Similarity
+↓
+Reranking
+↓
+Top 3–5 chunks
+↓
+OpenAI
+↓
+Answer
+```
+
+---
+
+# 13. Chunking
+
+ต้องออกแบบ Chunking สำหรับเอกสารภาษาไทย
+
+ไม่ควรตัดข้อความแบบสุ่มอย่างเดียว
+
+ควรพยายามรักษา:
+
+* heading
+* section
+* table
+* paragraph
+* page
+* list
+
+แต่ละ chunk ต้องเก็บ:
+
+```text
+document_id
+chunk_index
+chunk_text
+page_number
+section
+token/character count
+```
+
+ควรมี overlap ที่เหมาะสม
+
+ค่าต่าง ๆ ต้อง configurable
+
+เช่น:
+
+```text
+CHUNK_SIZE
+CHUNK_OVERLAP
+TOP_K
+```
+
+---
+
+# 14. Embedding
+
+Generate embedding ตอน Import เอกสาร
+
+ไม่ควรสร้าง embedding ของเอกสารใหม่ทุกครั้งที่ User ถาม
+
+```text
+Document Import
+    ↓
+Embedding
+    ↓
+Store
+```
+
+จากนั้นตอนถาม:
+
+```text
+User Query
+    ↓
+Query Embedding
+    ↓
+Similarity Search
+```
+
+Embedding model ต้องตั้งค่าได้จาก config
+
+ห้าม hard-code model
+
+---
+
+# 15. MySQL RAG Storage
+
+ออกแบบอย่างน้อย:
+
+## documents
+
+```text
+id
+google_drive_file_id
+file_name
+mime_type
+file_hash
+academic_year
+program
+study_plan
+admission_round
+project
+document_type
+source_url
+modified_time
+status
+created_at
+updated_at
+```
+
+## document_chunks
+
+```text
+id
+document_id
+chunk_index
+chunk_text
+page_number
+section
+token_count
+embedding
+created_at
+updated_at
+```
+
+ถ้า MySQL/MariaDB รุ่นที่ใช้งานรองรับ Vector Search ให้ใช้ native vector capability
+
+ถ้าไม่รองรับ:
+
+* เก็บ embedding เป็น JSON/BLOB
+* filter candidate ด้วย metadata ก่อน
+* คำนวณ cosine similarity เฉพาะ candidate ที่เหลือ
+
+อย่าคำนวณ embedding similarity กับเอกสารทุก chunk ทั้งฐานข้อมูลโดยไม่ filter
+
+---
+
+# 16. Hybrid Search
+
+ต้องใช้ทั้ง:
+
+### 1. Metadata Filtering
+
+เช่น:
+
+```text
+academic_year = 2570
+study_plan = อังกฤษและดิจิทัล
+```
+
+### 2. Keyword / Full-text Search
+
+หา keyword สำคัญ เช่น:
+
+```text
+ทะเบียนบ้าน
+หาดใหญ่
+สมัคร
+ภูมิลำเนา
+```
+
+### 3. Semantic Search
+
+ใช้ embedding similarity
+
+### 4. Reranking
+
+รวมคะแนน เช่น:
+
+```text
+metadata_match
+keyword_score
+semantic_score
+exact_phrase
+document_priority
+```
+
+แล้วจัดลำดับภายใน candidate ที่ผ่าน filter เท่านั้น
+
+ห้ามให้ semantic score เพียงอย่างเดียวตัดสิน
+
+---
+
+# 17. Strict Retrieval Rules
+
+ต้องมีกฎสำคัญ:
+
+### ห้ามข้ามปี
+
+ถ้าผู้ใช้ถาม 2570:
+
+```text
+ห้ามดึง 2569
+```
+
+เพื่อมาเติมคำตอบ
+
+### ห้ามข้ามแผน
+
+ถ้าผู้ใช้ถาม:
+
+```text
+อังกฤษและดิจิทัล
+```
+
+ห้ามใช้:
+
+```text
+วิทยาศาสตร์
+```
+
+เพียงเพราะ similarity สูง
+
+### ห้ามข้ามโครงการ
+
+ถ้าโครงการต่างกัน ต้องถือเป็นคนละ context
+
+### ถ้าข้อมูลไม่พอ
+
+ให้:
+
+```text
+[[NO_DATA]]
+```
+
+ไม่เดา
+
+---
+
+# 18. RAG Context ที่ส่งเข้า OpenAI
+
+ต้องส่ง source information ไปพร้อม context เช่น:
+
+```text
+SOURCE 1
+Document: รับสมัคร_ภาษาอังกฤษ_2570.pdf
+Academic Year: 2570
+Study Plan: อังกฤษและดิจิทัล
+Page: 4
+
+CONTENT:
+...
+```
+
+OpenAI ต้องได้รับคำสั่ง:
+
+* ตอบเฉพาะข้อมูลใน context
+* ห้ามเติมข้อมูลเอง
+* ห้ามใช้ความรู้ทั่วไปมาช่วยตอบเรื่องของโรงเรียน
+* ถ้า context ไม่พอ → `[[NO_DATA]]`
+* ห้ามอ้างข้อมูลจาก source ที่ไม่เกี่ยวข้อง
+
+---
+
+# 19. NO_DATA
+
+ต้องมีระบบกลาง:
+
+```text
+[[NO_DATA]]
+```
+
+ถ้า OpenAI ตอบ:
+
+```text
+[[NO_DATA]]
+```
+
+ระบบจะส่งข้อความที่ตั้งค่าไว้ เช่น:
+
+> ขออภัยค่ะ ขณะนี้ยังไม่พบข้อมูลในระบบ สามารถติดต่อเจ้าหน้าที่ได้ที่ 074-xxx-xxx ค่ะ
+
+ต้อง configurable จาก Admin
+
+---
+
+# 20. Prompt ของ Bot
+
+รักษา behavior เดิม:
+
+Bot name:
+
+> มีใจ
+
+บุคลิก:
+
+* ผู้ช่วยแชทของโรงเรียน
+* สุภาพ
+* เป็นมิตร
+* ตอบสั้น
+* ภาษาไทยธรรมชาติ
+* ลงท้ายด้วย “ค่ะ”
+
+กฎ:
+
+* ห้ามแต่งข้อมูล
+* ห้ามเดา
+* ห้ามขยายความเกินข้อมูล
+* ห้ามนำข้อมูลต่างปีมาปนกัน
+* ห้ามนำข้อมูลต่างแผนมาปนกัน
+* ห้ามนำข้อมูลต่างโครงการมาปนกัน
+* ถ้าข้อมูลไม่พอ → `[[NO_DATA]]`
+
+Short question:
+
+```text
+1–3 ประโยค
+```
+
+ถ้าผู้ใช้ถาม:
+
+```text
+รายละเอียด
+เพิ่มเติม
+อธิบาย
+แตกต่าง
+เปรียบเทียบ
+มีอะไรบ้าง
+ทั้งหมด
+```
+
+ให้ตอบแบบละเอียดขึ้น
+
+---
+
+# 21. Rulebase
+
+ต้องคงระบบ Rulebase เดิม
+
+รองรับ:
+
+```text
+exact
+contains
+regex
+```
+
+และ scoring
+
+Fields:
+
+```text
+id
+intent
+match_type
+keywords
+reply_type
+reply_text
+reply_data
+enabled
+priority
+created_at
+updated_at
+```
+
+Reply types:
+
+```text
+text
+button
+quick
+carousel
+card
+image
+filepdf
+```
+
+Rulebase ต้องทำงานก่อน RAG/OpenAI
+
+Flow:
+
+```text
+Message
+↓
+Rulebase
+↓
+Match?
+├── Yes → Reply
+└── No
+      ↓
+    RAG
+      ↓
+    OpenAI
+```
+
+---
+
+# 22. Facebook Messenger
+
+ต้องรองรับ:
+
+* Webhook Verify
+* POST webhook
+* Text
+* Quick Reply
+* Postback
+* Button
+* Card
+* Carousel
+* Image
+* PDF
+* Typing indicator
+
+Webhook:
+
+```text
+/webhook.php
+```
+
+ต้องใช้:
+
+```text
+GET → verify webhook
+POST → receive message
+```
+
+---
+
+# 23. Deduplication
+
+ต้องป้องกัน:
+
+### Facebook Event ซ้ำ
+
+เก็บ:
+
+```text
+event_id
+received_at
+expires_at
+```
+
+### User message ซ้ำ
+
+เช่น user ส่งข้อความเดิมภายใน 60 วินาที
+
+ไม่ควรตอบซ้ำ
+
+เก็บ:
+
+```text
+user_id
+message_hash
+normalized_message
+created_at
+```
+
+---
+
+# 24. Conversation History
+
+เก็บ:
+
+```text
+conversation_messages
+```
+
+อย่างน้อย:
+
+```text
+id
+user_id
+conversation_id
+role
+content
+message_type
+timestamp
+source
+metadata
+```
+
+Role:
+
+```text
+user
+assistant
+admin
+system
+```
+
+กำหนด configurable:
+
+```text
+HISTORY_MAX_MESSAGES = 12
+HISTORY_MAX_CHARS = 8000
+```
+
+---
+
+# 25. Agent / Human Handoff
+
+ต้องคง behavior เดิม
+
+Keywords:
+
+```text
+ติดต่อเจ้าหน้าที่
+ขอคุยกับคน
+คุยกับคน
+อยากคุยกับคน
+คุยกับเจ้าหน้าที่
+```
+
+เมื่อผู้ใช้กด:
+
+> ติดต่อเจ้าหน้าที่
+
+ระบบเข้าสู่:
+
+```text
+agent mode
+```
+
+ระหว่าง Agent Mode:
+
+```text
+Bot ไม่ตอบข้อความอัตโนมัติ
+```
+
+Admin สามารถตอบได้
+
+มีปุ่ม:
+
+> จบการสนทนา
+
+เมื่อจบ:
+
+```text
+agent mode → bot mode
+```
+
+---
+
+# 26. Agent Timeout
+
+GAS เดิมใช้ Time Trigger
+
+PHP ต้องเปลี่ยนเป็น:
+
+```text
+cron.php
+```
+
+เช่น:
+
+```text
+*/1 * * * * php /path/to/cron.php
+```
+
+หรือ URL cron ที่มี secret
+
+ต้องรองรับ:
+
+* Agent timeout
+* Cleanup processed events
+* Cleanup duplicate records
+* Google Drive Sync
+* RAG maintenance
+
+ต้องมี Cron Secret
+
+ห้ามเปิด cron endpoint แบบไม่มีการป้องกัน
+
+---
+
+# 27. Admin Dashboard
+
+สร้าง Admin Dashboard แบบเรียบง่าย
+
+เมนู:
+
+```text
+Dashboard
+Users
+Conversations
+Documents / RAG
+Rulebase
+Settings
+Logs
+```
+
+---
+
+# 28. Dashboard
+
+แสดง:
+
+```text
+Users ทั้งหมด
+Messages วันนี้
+Conversations วันนี้
+Agent Mode
+Rulebase Matches
+RAG Requests
+NO_DATA
+OpenAI Requests
+Errors
+```
+
+เพิ่มกราฟง่าย ๆ ได้ถ้าไม่เพิ่ม dependency มากเกินไป
+
+---
+
+# 29. Conversation Management
+
+หน้า:
+
+```text
+Conversations
+```
+
+สามารถ:
+
+* Search
+* Filter วันที่
+* Filter user
+* Filter agent/bot
+* เปิดดู conversation
+* ดู timestamp
+* ดู user message
+* ดู bot reply
+* ดู admin reply
+
+หน้า detail เป็น Chat UI
+
+---
+
+# 30. RAG Debug
+
+ต้องมีหน้า:
+
+```text
+RAG Debug
+```
+
+เพื่อการพัฒนาระบบและทำวิจัย
+
+เมื่อ user ถาม:
+
+```text
+แผนภาษาอังกฤษและดิจิทัลสมัครได้ไหม
+```
+
+ควรเห็น:
+
+```text
+Query
+Intent
+Academic Year
+Program
+Study Plan
+Project
+
+Metadata Filters
+
+Candidate Documents
+
+Keyword Scores
+Semantic Scores
+Rerank Scores
+
+Selected Chunks
+
+Final Context
+
+OpenAI Response
+
+NO_DATA / Answer
+```
+
+นี่เป็น feature สำคัญมาก
+
+---
+
+# 31. Document Management
+
+หน้า:
+
+```text
+Documents
+```
+
+แสดง:
+
+```text
+File Name
+Year
+Program
+Study Plan
+Project
+Type
+Status
+Last Modified
+Last Indexed
+```
+
+Actions:
+
+```text
+Sync
+Re-index
+Disable
+View Chunks
+View Metadata
+Delete Index
+```
+
+ต้องมีปุ่ม:
+
+> Sync Google Drive
+
+และ:
+
+> Re-index
+
+---
+
+# 32. Metadata ต้องแก้ไขได้จาก Admin
+
+อย่าบังคับให้ AI อ่านชื่อไฟล์แล้วเดา metadata ทั้งหมด
+
+Admin ควรแก้:
+
+```text
+ปี
+หลักสูตร
+แผน
+โครงการ
+รอบ
+ประเภทเอกสาร
+```
+
+ได้เอง
+
+AI สามารถช่วย suggest metadata ได้ แต่ต้องไม่ overwrite ข้อมูลที่ Admin กำหนดโดยอัตโนมัติ
+
+---
+
+# 33. Research Logs
+
+ระบบนี้จะถูกนำไปใช้เพื่อทำวิจัยเกี่ยวกับ Chatbot
+
+จึงต้องเก็บข้อมูลที่จำเป็นต่อการวิเคราะห์
+
+ต้องออกแบบ Logging ให้สามารถวิเคราะห์:
+
+### User behavior
+
+* จำนวน users
+* จำนวน conversations
+* จำนวน messages
+* active users
+* repeat users
+* session duration
+* first message
+* last message
+
+### Question behavior
+
+* user query
+* query length
+* intent
+* year
+* program
+* study plan
+* project
+* topic
+* question category
+
+### RAG behavior
+
+* documents retrieved
+* chunks retrieved
+* metadata filter
+* keyword score
+* semantic score
+* rerank score
+* selected chunks
+* retrieval latency
+* number of candidates
+* NO_DATA
+
+### OpenAI behavior
+
+* model
+* request time
+* response time
+* input token usage ถ้า API คืนค่า
+* output token usage ถ้า API คืนค่า
+* total tokens
+* API error
+* retry
+
+### Bot behavior
+
+* answer
+* answer length
+* rulebase / RAG / fallback
+* NO_DATA
+* handoff to human
+
+### Human handoff
+
+* entered agent mode
+* reason
+* timestamp
+* admin response time
+* conversation duration
+* ended by user/admin/timeout
+
+---
+
+# 34. Privacy / PDPA
+
+ต้องออกแบบให้เหมาะกับข้อมูลผู้ใช้งาน
+
+ห้ามเก็บข้อมูลส่วนบุคคลเกินความจำเป็น
+
+ต้อง:
+
+* Mask sensitive data ใน logs หากไม่จำเป็น
+* ไม่ log API key
+* ไม่ log Facebook access token
+* ไม่ log passwords
+* จำกัด Admin access
+* ใช้ password_hash()
+* Session security
+* CSRF protection
+* XSS protection
+* SQL Injection protection
+* Prepared Statements
+
+ควรมี:
+
+```text
+data_retention_days
+```
+
+สำหรับ cleanup logs
+
+---
+
+# 35. Security
+
+ต้องใช้:
+
+```text
+PDO Prepared Statements
+password_hash()
+password_verify()
+CSRF Token
+Session Regeneration
+HttpOnly Cookie
+SameSite Cookie
+Input Validation
+Output Escaping
+```
+
+API keys ต้องอยู่ใน:
+
+```text
+.env
+```
+
+หรือ configuration นอก public web root ถ้า hosting รองรับ
+
+ห้าม:
+
+```text
+echo API_KEY
+```
+
+ห้าม log secret
+
+---
+
+# 36. File Structure
+
+ออกแบบให้ใกล้เคียง:
+
+```text
+/chatbot/
+│
+├── index.php
+├── webhook.php
+├── cron.php
+├── config.php
+├── database.php
+├── functions.php
+├── auth.php
+├── messenger.php
+├── openai.php
+├── rag.php
+├── rag_query.php
+├── rag_importer.php
+├── google_drive.php
+├── document_parser.php
+├── chunker.php
+├── embedding.php
+├── rulebase.php
+├── logger.php
+│
+├── admin/
+│   ├── index.php
+│   ├── login.php
+│   ├── logout.php
+│   ├── users.php
+│   ├── conversations.php
+│   ├── conversation.php
+│   ├── documents.php
+│   ├── document.php
+│   ├── rag-debug.php
+│   ├── rulebase.php
+│   ├── settings.php
+│   └── logs.php
+│
+├── api/
+│   ├── users.php
+│   ├── conversations.php
+│   ├── documents.php
+│   ├── rag.php
+│   ├── rulebase.php
+│   └── settings.php
+│
+├── assets/
+│   ├── css/
+│   └── js/
+│
+├── sql/
+│   └── database.sql
+│
+└── .htaccess
+```
+
+สามารถปรับชื่อไฟล์ได้ถ้ามี architecture ที่ดีกว่า แต่ต้องอธิบายเหตุผล
+
+---
+
+# 37. Database
+
+สร้าง:
+
+```text
+users
+conversations
+conversation_messages
+processed_events
+duplicate_messages
+
+documents
+document_chunks
+document_sync_logs
+
+rulebase
+
+settings
+
+admin_users
+
+system_logs
+
+rag_logs
+openai_logs
+agent_sessions
+```
+
+เพิ่ม indexes ที่จำเป็น
+
+โดยเฉพาะ:
+
+```text
+user_id
+conversation_id
+timestamp
+academic_year
+program
+study_plan
+project
+document_id
+status
+```
+
+---
+
+# 38. Settings
+
+Admin สามารถตั้งค่า:
+
+### Facebook
+
+```text
+PAGE_ACCESS_TOKEN
+VERIFY_TOKEN
+```
+
+### OpenAI
+
+```text
+OPENAI_API_KEY
+OPENAI_MODEL
+OPENAI_REASONING_EFFORT
+OPENAI_MAX_OUTPUT_TOKENS
+OPENAI_EMBEDDING_MODEL
+```
+
+### RAG
+
+```text
+CHUNK_SIZE
+CHUNK_OVERLAP
+TOP_K
+VECTOR_THRESHOLD
+KEYWORD_WEIGHT
+SEMANTIC_WEIGHT
+RERANK_WEIGHT
+```
+
+### Agent
+
+```text
+AGENT_TIMEOUT
+AGENT_TIMEOUT_MESSAGE
+```
+
+### Bot
+
+```text
+SYSTEM_PROMPT
+NO_DATA_MESSAGE
+CONTACT_PHONE
+CONTACT_KEYWORDS
+```
+
+### Google Drive
+
+```text
+GOOGLE_DRIVE_FOLDER_ID
+```
+
+Secrets ต้องแสดงแบบ masked
+
+เช่น:
+
+```text
+sk-***************abcd
+```
+
+---
+
+# 39. Error Handling
+
+ระบบต้องไม่แสดง technical error ให้ผู้ใช้ Messenger
+
+เช่น OpenAI error:
+
+ไม่ควรส่ง:
+
+```text
+SQLSTATE...
+HTTP 500...
+API Exception...
+```
+
+ให้ user
+
+แต่ส่ง fallback:
+
+> ขออภัยค่ะ ขณะนี้ระบบขัดข้องชั่วคราว สามารถติดต่อเจ้าหน้าที่ได้ค่ะ
+
+และเก็บรายละเอียดลง:
+
+```text
+system_logs
+```
+
+---
+
+# 40. Logging Levels
+
+อย่างน้อย:
+
+```text
+INFO
+WARNING
+ERROR
+DEBUG
+```
+
+Production สามารถปิด DEBUG ได้
+
+---
+
+# 41. Configuration
+
+อย่า hard-code:
+
+* API key
+* Page token
+* Verify token
+* Google credentials
+* DB password
+* System prompt
+* Contact phone
+* RAG thresholds
+
+ทั้งหมดต้อง config ได้
+
+---
+
+# 42. .htaccess
+
+ป้องกัน:
+
+```text
+.env
+config.php
+database.php
+logs
+sql/
+Google credentials
+temporary files
+```
+
+ไม่ให้เข้าผ่าน Browser
+
+---
+
+# 43. Installation
+
+ต้องจัดทำ:
+
+```text
+sql/database.sql
+```
+
+ให้ import ผ่าน phpMyAdmin ได้ทันที
+
+ขั้นตอนติดตั้งต้องเป็น:
+
+### STEP 1
+
+สร้าง Database
+
+### STEP 2
+
+Import:
+
+```text
+database.sql
+```
+
+### STEP 3
+
+แก้:
+
+```text
+config.php
+```
+
+หรือ `.env`
+
+### STEP 4
+
+ตั้ง Google Drive
+
+### STEP 5
+
+ตั้ง Facebook Webhook:
+
+```text
+https://example.com/chatbot/webhook.php
+```
+
+### STEP 6
+
+Verify webhook
+
+### STEP 7
+
+ตั้ง Cron
+
+### STEP 8
+
+Login Admin
+
+### STEP 9
+
+Sync Google Drive
+
+### STEP 10
+
+ทดสอบ Messenger
+
+---
+
+# 44. Testing
+
+ต้องสร้าง Test Cases
+
+## Messenger
+
+* ข้อความปกติ
+* ข้อความซ้ำ
+* Event ซ้ำ
+* Postback
+* Quick Reply
+* Echo
+* Empty message
+
+## Rulebase
+
+* Exact
+* Contains
+* Regex
+* Priority
+* Disabled rule
+
+## RAG
+
+ทดสอบกรณีสำคัญ:
+
+### Case 1
+
+ถาม:
+
+> แผนภาษาอังกฤษและดิจิทัลสมัครได้ไหม
+
+ต้องไม่ดึงข้อมูลของ:
+
+> แผนวิทยาศาสตร์
+
+### Case 2
+
+ถาม 2570
+
+ต้องไม่ใช้ 2569
+
+### Case 3
+
+ถาม 2569
+
+ต้องไม่ใช้ 2570
+
+### Case 4
+
+ถามข้อมูลที่ไม่มีในเอกสาร
+
+ต้อง:
+
+```text
+[[NO_DATA]]
+```
+
+### Case 5
+
+ถามต่อเนื่อง
+
+```text
+แผนอังกฤษสมัครได้ไหม
+↓
+แล้วถ้าอยู่หาดใหญ่ล่ะ
+```
+
+ต้องรักษา context
+
+### Case 6
+
+เปลี่ยนแผน:
+
+```text
+แล้วถ้าเป็นแผนวิทยาศาสตร์ล่ะ
+```
+
+ต้องเปลี่ยน metadata context
+
+### Case 7
+
+เอกสารหลายไฟล์พูดคำเดียวกัน
+
+ต้องเลือกตาม metadata ก่อน
+
+---
+
+# 45. RAG Evaluation
+
+สร้างหน้า Admin สำหรับทดสอบชุดคำถาม
+
+สามารถสร้าง dataset:
+
+```text
+question
+expected_year
+expected_plan
+expected_project
+expected_document
+expected_answer
+```
+
+จากนั้นรัน Test
+
+แสดง:
+
+```text
+Question
+Expected Source
+Retrieved Source
+Correct / Incorrect
+NO_DATA
+Retrieval Score
+```
+
+เพื่อใช้ทำวิจัยและปรับปรุงระบบ
+
+---
+
+# 46. ห้ามทำสิ่งต่อไปนี้
+
+ห้าม:
+
+1. อ่าน Google Drive ทุกครั้งที่ User ถาม
+2. ใช้ semantic similarity อย่างเดียว
+3. เอาเอกสารทุกปีมาค้นพร้อมกันโดยไม่ filter
+4. เอาทุกแผนมาค้นพร้อมกันโดยไม่ filter
+5. ให้ LLM เดา metadata
+6. ให้ LLM เติมข้อมูลที่ไม่มีใน source
+7. ใช้ Vector Store เป็น knowledge base หลัก
+8. hard-code API keys
+9. เก็บ password แบบ plaintext
+10. log API key
+11. ให้ User เห็น error จาก Server
+12. ตัด Agent Mode
+13. ตัด Rulebase
+14. ตัด Conversation History
+15. ตัด Deduplication
+16. ตัด Logging
+
+---
+
+# 47. หลักการตอบคำถาม
+
+ต้องให้ความสำคัญตามลำดับ:
+
+```text
+1. Rulebase
+2. Query Analysis
+3. Metadata Filtering
+4. Keyword Search
+5. Semantic Search
+6. Reranking
+7. OpenAI Answer Generation
+8. NO_DATA
+```
+
+หาก Rulebase มีคำตอบที่ตรงชัดเจน ให้ใช้ Rulebase ก่อน
+
+หากไม่พบ Rulebase ให้เข้าสู่ RAG
+
+---
+
+# 48. Source Attribution ภายในระบบ
+
+ทุกคำตอบจาก RAG ต้องสามารถย้อนกลับได้ว่า:
+
+```text
+ตอบจากไฟล์อะไร
+หน้าอะไร
+chunk ไหน
+metadata อะไร
+คะแนน retrieval เท่าไร
+```
+
+ไม่จำเป็นต้องแสดงรายละเอียดทั้งหมดแก่ User
+
+แต่ Admin ต้องตรวจสอบได้
+
+---
+
+# 49. Performance
+
+ระบบต้องไม่ทำงานหนักเกินจำเป็น
+
+ห้าม:
+
+```text
+โหลด document ทั้งหมด
+↓
+สร้าง embedding ใหม่ทั้งหมด
+↓
+ทุกครั้งที่ user ถาม
+```
+
+ต้อง:
+
+```text
+Import once
+↓
+Index
+↓
+Query efficiently
+```
+
+ใช้ database indexes
+
+และ cache ได้ถ้าจำเป็น
+
+---
+
+# 50. Output ที่ฉันต้องการจากคุณ
+
+อย่าเขียนโค้ดทั้งหมดในครั้งเดียวโดยไม่มีการอธิบาย
+
+ให้ทำตามลำดับ:
+
+## PHASE 1
+
+วิเคราะห์ GAS เดิม
+
+ส่ง:
+
+* Architecture
+* Flow
+* Feature list
+* Mapping GAS → PHP
+* จุดที่ต้องรักษา behavior
+* จุดที่ควรแก้ไข
+
+## PHASE 2
+
+ออกแบบ Architecture ใหม่
+
+แสดง:
+
+```text
+Google Drive
+↓
+Importer
+↓
+MySQL
+↓
+Hybrid RAG
+↓
+OpenAI
+↓
+Messenger
+```
+
+## PHASE 3
+
+ออกแบบ Database
+
+ส่ง:
+
+* ER Diagram แบบ text
+* ตารางทั้งหมด
+* column
+* datatype
+* index
+* relationship
+
+## PHASE 4
+
+ออกแบบ RAG
+
+อธิบายละเอียด:
+
+* Document ingestion
+* Metadata
+* Chunking
+* Embedding
+* Metadata filtering
+* Keyword search
+* Semantic search
+* Reranking
+* Context construction
+* NO_DATA
+* Evaluation
+
+## PHASE 5
+
+สร้าง File Structure
+
+## PHASE 6
+
+สร้าง SQL:
+
+```text
+database.sql
+```
+
+## PHASE 7
+
+เขียน PHP ทีละส่วน
+
+เริ่มจาก:
+
+```text
+config.php
+database.php
+functions.php
+```
+
+จากนั้น:
+
+```text
+messenger.php
+openai.php
+google_drive.php
+document_parser.php
+chunker.php
+embedding.php
+rag.php
+rulebase.php
+```
+
+จากนั้น:
+
+```text
+webhook.php
+cron.php
+```
+
+จากนั้น:
+
+```text
+admin/
+```
+
+## PHASE 8
+
+สร้าง Installation Guide
+
+## PHASE 9
+
+สร้าง Testing Guide
+
+## PHASE 10
+
+สร้าง RAG Evaluation / Research Guide
+
+---
+
+# 51. สิ่งที่ต้องระวังเป็นพิเศษ
+
+ระบบนี้ใช้กับข้อมูลรับสมัครนักเรียน/นักศึกษา
+
+ดังนั้น:
+
+> ความถูกต้องของข้อมูลสำคัญกว่าความสามารถในการตอบทุกคำถาม
+
+ถ้าไม่แน่ใจ:
+
+```text
+NO_DATA
+```
+
+ดีกว่า:
+
+```text
+เดา
+```
+
+และ:
+
+> ข้อมูลคนละปี / คนละแผน / คนละโครงการ ต้องถือว่าเป็นคนละ Knowledge Context
+
+อย่าปล่อยให้ semantic similarity ทำลายข้อนี้
+
+---
+
+# 52. เป้าหมายสุดท้าย
+
+เมื่อพัฒนาจบ ฉันต้องสามารถ:
+
+```text
+1. เปิด Google Drive
+2. ใส่/แก้ PDF
+3. กำหนด metadata
+4. กด Sync
+5. ระบบสร้าง RAG index
+6. User ถามผ่าน Facebook Messenger
+7. Rulebase ตรวจ
+8. RAG ค้นแบบ Metadata + Keyword + Embedding + Reranking
+9. OpenAI สร้างคำตอบ
+10. Messenger ส่งคำตอบ
+11. เก็บ conversation/log/retrieval data
+12. Admin ตรวจสอบย้อนหลังได้
+```
+
+โดยไม่ต้องกลับไปแก้ Google Apps Script อีก
+
+---
+
+# 53. สิ่งที่ต้องการเป็นพิเศษจากคุณ
+
+ก่อนเขียนโค้ด ให้ตรวจสอบ Source Code GAS ที่ฉันส่งให้ครบทุกฟังก์ชัน
+
+ถ้าพบ behavior ใดใน GAS ที่ Prompt นี้ไม่ได้กล่าวถึง:
+
+1. แจ้งฉัน
+2. ระบุว่า feature เดิมคืออะไร
+3. ระบุว่าจะย้ายไป PHP ตรงไหน
+4. อย่าตัดออกเอง
+
+ถ้ามีข้อจำกัดของ Shared Hosting เช่น:
+
+* PHP extension
+* MySQL version
+* Google API
+* PDF parser
+* Cron
+* file permission
+* cURL
+
+ให้แจ้งก่อนเลือก implementation
+
+อย่าออกแบบระบบที่ต้องใช้ infrastructure ที่ฉันไม่ได้มี
+
+---
+
+# 54. หลักสำคัญที่สุด
+
+ต้องคิดระบบนี้เป็น:
+
+```text
+Google Drive
+=
+Source of Truth
+
+MySQL
+=
+Application Database + RAG Index
+
+PHP
+=
+Application + Webhook + RAG Engine
+
+OpenAI
+=
+Language Understanding + Answer Generation
+
+Facebook Messenger
+=
+User Interface
+```
+
+ไม่ใช่:
+
+```text
+Facebook
+↓
+OpenAI
+↓
+เดาคำตอบ
+```
+
+และไม่ใช่:
+
+```text
+Facebook
+↓
+ค้น Vector Store ทุกไฟล์
+↓
+ตอบ
+```
+
+แต่ต้องเป็น:
+
+```text
+Facebook
+↓
+Rulebase
+↓
+Query Analysis
+↓
+Metadata Filter
+↓
+Keyword Search
+↓
+Semantic Search
+↓
+Reranking
+↓
+Grounded Context
+↓
+OpenAI
+↓
+Validated Answer
+↓
+Facebook
+```
+
+ให้เน้นความถูกต้องของข้อมูล ความสามารถในการตรวจสอบย้อนหลัง ความปลอดภัย และความง่ายในการดูแลระบบเป็นหลัก
